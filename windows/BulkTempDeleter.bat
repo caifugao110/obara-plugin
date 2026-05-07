@@ -1,4 +1,4 @@
-:: @theme:Lib 批量删除temp文件
+:: @theme:批量删除temp文件工具
 :: @author:Tobin
 :: @version:1.2.0
 :: @date:MAY.06.26

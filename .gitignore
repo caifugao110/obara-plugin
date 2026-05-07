@@ -1,2 +1,5 @@
 # Ignore refcode.txt
 refcode.txt
+
+# Ignore Trae rules
+.trae/rules/

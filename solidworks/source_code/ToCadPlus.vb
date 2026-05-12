@@ -12,7 +12,7 @@ Dim swModel As SldWorks.ModelDoc2
 Dim currentAssembly As SldWorks.ModelDoc2
 
 ' 常量定义
-Const TEMPLATE_PATH As String = "\\192.168.160.2\生产管理部3d\3D 资料\check\check27\VBA FOR SW(不要拷贝不定期更新)\自动生图模板\源代码\ToCadPlus装配图模板E.drwdot"
+Const TEMPLATE_PATH As String = "\\192.168.160.2\生产管理部3d\3D 资料\check\check27\VBA FOR SW(不要拷贝不定期更新)\自动生图模板\template\ToCadPlusAssemblyTemplate.drwdot"
 Const NETWORK_BASE_PATH As String = "\\192.168.160.2\生产管理部3d\3D 资料\01-设计一课确认图\DWG-TEMP\"
 ' 日志相关常量
 Const LOG_BASE_PATH As String = "\\192.168.160.2\生产管理部3d\3D 资料\check\check27\Version control\VBA FOR SW\LOG\DWG"
@@ -40,6 +40,9 @@ Sub main()
     
     ' 视图设置
     ConfigureViewSettings
+    
+    ' 显示质心并打开注解显示
+    ShowCenterOfMassInAllViews
     
     ' 保存文件
     SaveDocuments outputPath
@@ -187,6 +190,162 @@ Sub ConfigureViewSettings()
 ConfigError:
     Err.Raise vbObjectError + 9, , "配置视图设置失败：" & Err.Description
 End Sub
+
+' 显示所有视图中的质心并打开相关显示开关
+Sub ShowCenterOfMassInAllViews()
+    On Error Resume Next
+    Dim swModelDocExt As Object
+    Dim views As Variant
+    Dim vv As Variant
+    Dim sheetIdx As Long
+    Dim viewIdx As Long
+    Dim swView As Object
+    Dim viewName As String
+    Dim hasCOM As Boolean
+    
+    swModel.ForceRebuild3 True
+    
+    Set swModelDocExt = swModel.Extension
+    If Not swModelDocExt Is Nothing Then
+        swModelDocExt.SetUserPreferenceToggle swViewDisplayHideAllTypes, False
+        swModelDocExt.SetUserPreferenceToggle swDisplayAllAnnotations, swDetailingNoOptionSpecified, True
+        swModelDocExt.SetUserPreferenceToggle swDisplayCenterOfMass, swDetailingNoOptionSpecified, True
+    End If
+    
+    views = swModel.GetViews
+    If IsEmpty(views) Then Exit Sub
+    
+    hasCOM = False
+    
+    For sheetIdx = LBound(views) To UBound(views)
+        vv = views(sheetIdx)
+        If Not IsEmpty(vv) Then
+            For viewIdx = 1 To UBound(vv)
+                Set swView = vv(viewIdx)
+                If Not swView Is Nothing Then
+                    viewName = swView.Name
+                    swView.DisplayCenterOfMass = True
+                    swModel.ActivateView viewName
+                    swView.ForceRebuild
+                    
+                    If UnblankCenterOfMassInView(swView) Then
+                        hasCOM = True
+                    End If
+                End If
+            Next viewIdx
+        End If
+    Next sheetIdx
+    
+    If hasCOM Then
+        swModel.Rebuild swRebuildAll
+        swModel.GraphicsRedraw2
+    End If
+End Sub
+
+Function UnblankCenterOfMassInView(swView As Object) As Boolean
+    On Error Resume Next
+    Dim viewName As String
+    Dim swRefDoc As Object
+    Dim modelTitle As String
+    Dim viewNumStr As String
+    Dim comName As String
+    Dim boolstatus As Boolean
+    Dim found As Boolean
+    Dim i As Long
+    
+    found = False
+    viewName = swView.Name
+    
+    Set swRefDoc = swView.ReferencedDocument
+    modelTitle = ""
+    If Not swRefDoc Is Nothing Then
+        modelTitle = swRefDoc.GetTitle
+        If InStrRev(modelTitle, ".") > 0 Then
+            modelTitle = Left(modelTitle, InStrRev(modelTitle, ".") - 1)
+        End If
+    End If
+    
+    viewNumStr = ""
+    For i = Len(viewName) To 1 Step -1
+        If IsNumeric(Mid(viewName, i, 1)) Then
+            viewNumStr = Mid(viewName, i, 1) & viewNumStr
+        Else
+            Exit For
+        End If
+    Next i
+    
+    If modelTitle <> "" And viewNumStr <> "" Then
+        comName = "质心 (COM)@" & modelTitle & "-" & viewNumStr & "@" & viewName
+        boolstatus = swModel.Extension.SelectByID2(comName, "CENTEROFMASS", 0, 0, 0, False, 0, Nothing, 0)
+        If boolstatus Then swModel.UnBlankRefGeom: found = True
+    End If
+    
+    If Not found And modelTitle <> "" Then
+        comName = "质心 (COM)@" & modelTitle & "@" & viewName
+        boolstatus = swModel.Extension.SelectByID2(comName, "CENTEROFMASS", 0, 0, 0, False, 0, Nothing, 0)
+        If boolstatus Then swModel.UnBlankRefGeom: found = True
+    End If
+    
+    If Not found And modelTitle <> "" And viewNumStr <> "" Then
+        comName = "CenterOfMass (COM)@" & modelTitle & "-" & viewNumStr & "@" & viewName
+        boolstatus = swModel.Extension.SelectByID2(comName, "CENTEROFMASS", 0, 0, 0, False, 0, Nothing, 0)
+        If boolstatus Then swModel.UnBlankRefGeom: found = True
+    End If
+    
+    If Not found And modelTitle <> "" Then
+        comName = "CenterOfMass (COM)@" & modelTitle & "@" & viewName
+        boolstatus = swModel.Extension.SelectByID2(comName, "CENTEROFMASS", 0, 0, 0, False, 0, Nothing, 0)
+        If boolstatus Then swModel.UnBlankRefGeom: found = True
+    End If
+    
+    If Not found Then
+        If UnblankCOMRecursiveInView(swView, swView) Then found = True
+    End If
+    
+    swModel.ClearSelection2 True
+    UnblankCenterOfMassInView = found
+End Function
+
+Function UnblankCOMRecursiveInView(swView As Object, swParentFeat As Object) As Boolean
+    On Error Resume Next
+    Dim swFeat As Object
+    Dim swNextFeat As Object
+    Dim found As Boolean
+    Dim featName As String
+    Dim typeName As String
+    Dim selName As String
+    Dim bRet As Boolean
+    
+    found = False
+    Set swFeat = swParentFeat.GetFirstSubFeature
+    
+    Do While Not swFeat Is Nothing
+        featName = swFeat.Name
+        typeName = swFeat.GetTypeName2
+        
+        If InStr(featName, "质心") > 0 Or InStr(typeName, "CenterOfMass") > 0 Then
+            selName = featName & "@" & swView.Name
+            bRet = swModel.Extension.SelectByID2(selName, "CENTEROFMASS", 0, 0, 0, False, 0, Nothing, 0)
+            If bRet Then
+                swModel.UnBlankRefGeom
+                found = True
+            End If
+            
+            bRet = swModel.Extension.SelectByID2(featName, "COM", 0, 0, 0, False, 0, Nothing, 0)
+            If bRet Then
+                swModel.UnBlankRefGeom
+                found = True
+            End If
+        End If
+        
+        If UnblankCOMRecursiveInView(swView, swFeat) Then found = True
+        
+        Set swNextFeat = swFeat.GetNextSubFeature
+        Set swFeat = swNextFeat
+    Loop
+    
+    UnblankCOMRecursiveInView = found
+End Function
 
 ' 保存文件
 Sub SaveDocuments(outputPath As String)

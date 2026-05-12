@@ -4,6 +4,7 @@
 ' 250605处理日志文件名为空问题
 ' 250606增加文档打开判断逻辑，非工程图则退出
 ' 250611更换log地址
+' 260512增加质心显示并导出功能
 ' ******************************************************************************
 
 Dim swApp As Object
@@ -40,6 +41,7 @@ Sub Main()
     
     InitializeEnvironment
     CreateNetworkFolder
+    ShowCenterOfMassInAllViews
     ProcessDocument
 End Sub
 
@@ -66,6 +68,115 @@ Private Sub CreateNetworkFolder()
     End If
     Set fso = Nothing
 End Sub
+
+Private Sub ShowCenterOfMassInAllViews()
+    On Error Resume Next
+    Dim swModelDocExt As Object
+    Dim views As Variant
+    Dim vv As Variant
+    Dim sheetIdx As Long
+    Dim viewIdx As Long
+    Dim swView As Object
+    Dim viewName As String
+    Dim hasCOM As Boolean
+    
+    Set swModelDocExt = Part.Extension
+    If Not swModelDocExt Is Nothing Then
+        swModelDocExt.SetUserPreferenceToggle swDisplayAllAnnotations, swDetailingNoOptionSpecified, True
+        swModelDocExt.SetUserPreferenceToggle swDisplayCenterOfMass, swDetailingNoOptionSpecified, True
+    End If
+    
+    views = Part.GetViews
+    If IsEmpty(views) Then Exit Sub
+    
+    hasCOM = False
+    
+    For sheetIdx = LBound(views) To UBound(views)
+        vv = views(sheetIdx)
+        If Not IsEmpty(vv) Then
+            For viewIdx = 1 To UBound(vv)
+                Set swView = vv(viewIdx)
+                If Not swView Is Nothing Then
+                    viewName = swView.Name
+                    Part.ActivateView viewName
+                    If UnblankCenterOfMassInView(swView) Then
+                        hasCOM = True
+                    End If
+                End If
+            Next viewIdx
+        End If
+    Next sheetIdx
+    
+    If hasCOM Then
+        Part.Rebuild swRebuildAll
+        Part.GraphicsRedraw2
+    End If
+End Sub
+
+Private Function UnblankCenterOfMassInView(swView As Object) As Boolean
+    On Error Resume Next
+    Dim viewName As String
+    Dim swRefDoc As Object
+    Dim modelTitle As String
+    Dim viewNumStr As String
+    Dim comName As String
+    Dim boolstatus As Boolean
+    Dim i As Long
+    
+    viewName = swView.Name
+    modelTitle = ""
+    
+    Set swRefDoc = swView.ReferencedDocument
+    If Not swRefDoc Is Nothing Then
+        modelTitle = swRefDoc.GetTitle
+        If InStrRev(modelTitle, ".") > 0 Then
+            modelTitle = Left(modelTitle, InStrRev(modelTitle, ".") - 1)
+        End If
+    End If
+    
+    If modelTitle = "" Then
+        UnblankCenterOfMassInView = False
+        Exit Function
+    End If
+    
+    viewNumStr = ""
+    For i = Len(viewName) To 1 Step -1
+        If IsNumeric(Mid(viewName, i, 1)) Then
+            viewNumStr = Mid(viewName, i, 1) & viewNumStr
+        Else
+            Exit For
+        End If
+    Next i
+    
+    If viewNumStr <> "" Then
+        comName = "质心 (COM)@" & modelTitle & "-" & viewNumStr & "@" & viewName
+        boolstatus = Part.Extension.SelectByID2(comName, "CENTEROFMASS", 0, 0, 0, False, 0, Nothing, 0)
+    End If
+    
+    If Not boolstatus Then
+        comName = "质心 (COM)@" & modelTitle & "@" & viewName
+        boolstatus = Part.Extension.SelectByID2(comName, "CENTEROFMASS", 0, 0, 0, False, 0, Nothing, 0)
+    End If
+    
+    If Not boolstatus And viewNumStr <> "" Then
+        comName = "CenterOfMass (COM)@" & modelTitle & "-" & viewNumStr & "@" & viewName
+        boolstatus = Part.Extension.SelectByID2(comName, "CENTEROFMASS", 0, 0, 0, False, 0, Nothing, 0)
+    End If
+    
+    If Not boolstatus Then
+        comName = "CenterOfMass (COM)@" & modelTitle & "@" & viewName
+        boolstatus = Part.Extension.SelectByID2(comName, "CENTEROFMASS", 0, 0, 0, False, 0, Nothing, 0)
+    End If
+    
+    If boolstatus Then
+        Part.UnBlankRefGeom
+        UnblankCenterOfMassInView = True
+    Else
+        UnblankCenterOfMassInView = False
+    End If
+    
+    Part.ClearSelection2 True
+End Function
 
 Private Sub ProcessDocument()
     On Error Resume Next
@@ -107,6 +218,12 @@ Private Sub ProcessDocument()
         Next file
         Set folder = Nothing
     End If
+    
+    Part.ViewZoomtofit2
+    Part.GraphicsRedraw2
+    Part.Save4 True, False, Nothing
+    Part.Rebuild swRebuildAll
+    Part.GraphicsRedraw2
     
     ' DWG 处理
     dwgPath = networkPath & baseName & ".DWG"

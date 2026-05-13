@@ -1,6 +1,7 @@
 '----------------------------------------------------------------------
 ' 这是solidworks2018的宏代码文件。
 ' 260512增加质心位置和坐标系显示功能
+' 260513增加隐藏基准面的功能
 '----------------------------------------------------------------------
 
 Option Explicit
@@ -205,7 +206,7 @@ Sub main()
     Dim existingCom As SldWorks.Feature
     Set existingCom = swModel.FeatureByName("Center of Mass")
     If existingCom Is Nothing Then
-        Set existingCom = swModel.FeatureByName("重心")
+        Set existingCom = swModel.FeatureByName("质心")
     End If
     If Not existingCom Is Nothing Then
         existingCom.Select2 False, 0
@@ -216,9 +217,10 @@ Sub main()
     ' 9. 显示坐标系1
     boolStatus = swModel.Extension.SelectByID2("坐标系1", "COORDSYS", 0, 0, 0, False, 0, Nothing, 0)
     
-    ' 10. 隐藏草图和临时轴
+    ' 10. 隐藏草图、临时轴和基准面
     swModel.Extension.SetUserPreferenceToggle swUserPreferenceToggle_e.swDisplaySketches, swUserPreferenceOption_e.swDetailingNoOptionSpecified, False
     swModel.Extension.SetUserPreferenceToggle swUserPreferenceToggle_e.swDisplayTemporaryAxes, swUserPreferenceOption_e.swDetailingNoOptionSpecified, False
+    swModel.Extension.SetUserPreferenceToggle swUserPreferenceToggle_e.swDisplayPlanes, swUserPreferenceOption_e.swDetailingNoOptionSpecified, False
     
     ' 11. 准备输出
     title = swModel.GetTitle

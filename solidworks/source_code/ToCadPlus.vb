@@ -722,15 +722,9 @@ Function FindTableByName(drawingModel As Object, tableName As String) As Object
     Set FindTableByName = Nothing
 End Function
 
-' Payload Mass：装配体质量 +6 后四舍五入取整再写入
+' Payload Mass：装配体质量先截断小数（向 0 取整）+6 后写入
 Private Function FormatPayloadMassForTable(ByVal rawMass As Variant) As String
-    Dim v As Double
-    v = CDbl(rawMass) + 6#
-    If v >= 0# Then
-        FormatPayloadMassForTable = CStr(CLng(Fix(v + 0.5)))
-    Else
-        FormatPayloadMassForTable = CStr(CLng(Fix(v - 0.5)))
-    End If
+    FormatPayloadMassForTable = CStr(CLng(Fix(CDbl(rawMass))) + 6&)
 End Function
 
 Private Function GetTableCellTextSafe(tbl As Object, rowIdx As Integer, colIdx As Integer) As String

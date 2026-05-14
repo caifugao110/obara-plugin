@@ -2,6 +2,8 @@
 ' 这是solidworks2018的宏代码文件。
 ' 250606处理日志文件名为空问题
 ' 250611更换log地址
+' 260512增加质心显示并导出功能
+' 260514增加PAYLOAD数据写入功能
 ' ******************************************************************************
 
 ' 声明SolidWorks应用程序接口类型（早期绑定）
@@ -43,6 +45,17 @@ Sub main()
     
     ' 显示质心并打开注解显示
     ShowCenterOfMassInAllViews
+    
+    ' 写入质量属性到表格
+    Dim massProps As Variant
+    massProps = GetMassPropertiesFromAssembly(currentAssembly)
+    If Not IsEmpty(massProps) Then
+        If Not swModel Is Nothing Then
+            WriteMassPropertiesToTable swModel, massProps
+        Else
+            MsgBox "swModel 对象为空，无法写入表格", vbCritical
+        End If
+    End If
     
     ' 保存文件
     SaveDocuments outputPath
@@ -465,6 +478,379 @@ Function GetFileNameWithoutExtension(fileName As String) As String
     Else
         GetFileNameWithoutExtension = fileName
     End If
+End Function
+
+' 获取质量属性（基于坐标系1）
+Function GetMassPropertiesFromAssembly(assemblyModel As SldWorks.ModelDoc2) As Variant
+    On Error GoTo ErrorHandler
+    
+    Dim swMathUtil As SldWorks.MathUtility
+    Dim swMathTrans As SldWorks.MathTransform
+    Dim swInverseTrans As SldWorks.MathTransform
+    Dim swMathPoint As SldWorks.MathPoint
+    Dim swComPointCustom As SldWorks.MathPoint
+    
+    Dim massValue As Double
+    Dim com_custom As Variant
+    Dim moi_custom(8) As Double
+    
+    Set swMathUtil = swApp.GetMathUtility
+    
+    Set swMathTrans = assemblyModel.Extension.GetCoordinateSystemTransformByName("坐标系1")
+    If swMathTrans Is Nothing Then
+        GetMassPropertiesFromAssembly = Empty
+        Exit Function
+    End If
+    
+    Set swInverseTrans = swMathTrans.Inverse()
+    
+    Dim vMassProps As Variant
+    Dim nErrors As Long
+    vMassProps = assemblyModel.Extension.GetMassProperties2(9, False, nErrors)
+    
+    massValue = vMassProps(5)
+    
+    Dim com_arr(2) As Double
+    com_arr(0) = vMassProps(0)
+    com_arr(1) = vMassProps(1)
+    com_arr(2) = vMassProps(2)
+    
+    Set swMathPoint = swMathUtil.CreatePoint(com_arr)
+    Set swComPointCustom = swMathPoint.MultiplyTransform(swInverseTrans)
+    com_custom = swComPointCustom.ArrayData
+    
+    Dim I_global(2, 2) As Double
+    I_global(0, 0) = vMassProps(6)
+    I_global(0, 1) = -vMassProps(9)
+    I_global(0, 2) = -vMassProps(10)
+    I_global(1, 0) = -vMassProps(9)
+    I_global(1, 1) = vMassProps(7)
+    I_global(1, 2) = -vMassProps(11)
+    I_global(2, 0) = -vMassProps(10)
+    I_global(2, 1) = -vMassProps(11)
+    I_global(2, 2) = vMassProps(8)
+    
+    Dim arrData As Variant
+    arrData = swInverseTrans.ArrayData
+    Dim R(2, 2) As Double
+    Dim i As Integer, j As Integer, k As Integer
+    For i = 0 To 2: For j = 0 To 2
+        R(i, j) = arrData(j * 3 + i)
+    Next j: Next i
+    
+    Dim temp(2, 2) As Double
+    Dim I_local(2, 2) As Double
+    For i = 0 To 2: For j = 0 To 2
+        temp(i, j) = 0
+        For k = 0 To 2: temp(i, j) = temp(i, j) + R(i, k) * I_global(k, j): Next k
+    Next j: Next i
+    
+    For i = 0 To 2: For j = 0 To 2
+        I_local(i, j) = 0
+        For k = 0 To 2: I_local(i, j) = I_local(i, j) + temp(i, k) * R(j, k): Next k
+    Next j: Next i
+    
+    moi_custom(0) = I_local(0, 0)
+    moi_custom(4) = I_local(1, 1)
+    moi_custom(8) = I_local(2, 2)
+    
+    Dim result As Variant
+    ReDim result(6)
+    result(0) = massValue
+    result(1) = com_custom(0)
+    result(2) = com_custom(1)
+    result(3) = com_custom(2)
+    result(4) = moi_custom(0)
+    result(5) = moi_custom(4)
+    result(6) = moi_custom(8)
+    
+    GetMassPropertiesFromAssembly = result
+    Exit Function
+    
+ErrorHandler:
+    GetMassPropertiesFromAssembly = Empty
+End Function
+
+' 向工程图表格写入质量属性数据
+Sub WriteMassPropertiesToTable(drawingModel As Object, massProps As Variant)
+    On Error GoTo ErrorHandler
+
+    Dim swTableObj As Object
+    Dim tableTitle As String
+    Dim success As Boolean
+    
+    tableTitle = "总表1"
+
+    If IsEmpty(massProps) Then
+        MsgBox "质量属性数据为空", vbExclamation
+        Exit Sub
+    End If
+
+    Set swTableObj = FindTableByName(drawingModel, tableTitle)
+    If swTableObj Is Nothing Then
+        MsgBox "未找到名为 '" & tableTitle & "' 的表格", vbExclamation
+        Exit Sub
+    End If
+
+    success = WriteTableDataDirect(swTableObj, massProps)
+    If Not success Then
+        MsgBox "写入表格数据失败", vbExclamation
+    End If
+
+    Exit Sub
+
+ErrorHandler:
+    MsgBox "写入表格失败: " & Err.Description & vbNewLine & "错误行: " & Erl, vbCritical
+End Sub
+
+' SelectByID2(..., "GENERALTABLEFEAT", ...) 得到的是 GeneralTableFeature，不是 TableAnnotation；
+' 后者才支持通过 Text 属性写入单元格。
+Function ResolveToTableAnnotation(swObj As Object, ByVal tableName As String) As Object
+    Dim tblCount As Long
+    Dim vTables As Variant
+    Dim i As Long
+    Dim t As Object
+    Dim rc As Long
+    
+    If swObj Is Nothing Then Exit Function
+    
+    On Error Resume Next
+    rc = swObj.RowCount
+    If Err.Number = 0 Then
+        Set ResolveToTableAnnotation = swObj
+        Exit Function
+    End If
+    Err.Clear
+    
+    tblCount = swObj.GetTableAnnotationCount
+    If Err.Number = 0 And tblCount > 0 Then
+        vTables = swObj.GetTableAnnotations
+        If Err.Number = 0 Then
+            If IsArray(vTables) Then
+                For i = LBound(vTables) To UBound(vTables)
+                    Set t = vTables(i)
+                    If Not t Is Nothing Then
+                        If StrComp(t.Title, tableName, vbTextCompare) = 0 Then
+                            Set ResolveToTableAnnotation = t
+                            Exit Function
+                        End If
+                    End If
+                Next i
+                For i = LBound(vTables) To UBound(vTables)
+                    Set t = vTables(i)
+                    If Not t Is Nothing Then
+                        Set ResolveToTableAnnotation = t
+                        Exit Function
+                    End If
+                Next i
+                Exit Function
+            Else
+                Err.Clear
+                Set t = Nothing
+                On Error Resume Next
+                Set t = vTables
+                If Err.Number = 0 Then
+                    If Not t Is Nothing Then
+                        Set ResolveToTableAnnotation = t
+                        Exit Function
+                    End If
+                End If
+                Err.Clear
+            End If
+        End If
+    End If
+    Err.Clear
+    Set ResolveToTableAnnotation = swObj
+End Function
+
+Function FindTableByName(drawingModel As Object, tableName As String) As Object
+    Dim swTable As Object
+    Dim swAnnotation As Object
+    Dim swAnnotations As Variant
+    Dim i As Integer
+    Dim boolstatus As Boolean
+    
+    boolstatus = drawingModel.Extension.SelectByID2(tableName, "GENERALTABLEFEAT", 0, 0, 0, False, 0, Nothing, 0)
+    If boolstatus Then
+        On Error Resume Next
+        Set swTable = drawingModel.SelectionManager.GetSelectedObject6(1, -1)
+        On Error GoTo 0
+        drawingModel.ClearSelection2 True
+        If Not swTable Is Nothing Then
+            Set FindTableByName = ResolveToTableAnnotation(swTable, tableName)
+            Exit Function
+        End If
+    End If
+    
+    boolstatus = drawingModel.Extension.SelectByID2(tableName, "TABLE", 0, 0, 0, False, 0, Nothing, 0)
+    If boolstatus Then
+        On Error Resume Next
+        Set swTable = drawingModel.SelectionManager.GetSelectedObject6(1, -1)
+        On Error GoTo 0
+        drawingModel.ClearSelection2 True
+        If Not swTable Is Nothing Then
+            Set FindTableByName = ResolveToTableAnnotation(swTable, tableName)
+            Exit Function
+        End If
+    End If
+    
+    On Error Resume Next
+    swAnnotations = drawingModel.GetAnnotations
+    On Error GoTo 0
+    
+    If IsEmpty(swAnnotations) Then
+        Set FindTableByName = Nothing
+        Exit Function
+    End If
+
+    For i = LBound(swAnnotations) To UBound(swAnnotations)
+        Set swAnnotation = swAnnotations(i)
+        If Not swAnnotation Is Nothing Then
+            On Error Resume Next
+            Set swTable = swAnnotation.GetTableAnnotation
+            On Error GoTo 0
+            
+            If Not swTable Is Nothing Then
+                If StrComp(swTable.Title, tableName, vbTextCompare) = 0 Then
+                    Set FindTableByName = ResolveToTableAnnotation(swTable, tableName)
+                    Exit Function
+                End If
+            End If
+        End If
+    Next i
+    
+    Set FindTableByName = Nothing
+End Function
+
+' Payload Mass：装配体质量 +6 后四舍五入取整再写入
+Private Function FormatPayloadMassForTable(ByVal rawMass As Variant) As String
+    Dim v As Double
+    v = CDbl(rawMass) + 6#
+    If v >= 0# Then
+        FormatPayloadMassForTable = CStr(CLng(Fix(v + 0.5)))
+    Else
+        FormatPayloadMassForTable = CStr(CLng(Fix(v - 0.5)))
+    End If
+End Function
+
+Private Function GetTableCellTextSafe(tbl As Object, rowIdx As Integer, colIdx As Integer) As String
+    Dim s As String
+    On Error Resume Next
+    s = CStr(tbl.Text(rowIdx, colIdx))
+    If Err.Number = 0 And Len(Trim$(s)) > 0 Then GetTableCellTextSafe = s: Exit Function
+    Err.Clear
+    s = CStr(tbl.displayedText(rowIdx, colIdx))
+    If Err.Number = 0 Then GetTableCellTextSafe = s Else GetTableCellTextSafe = "": Err.Clear
+End Function
+
+' 占位「Mass」所在格即首行数值格；向下连续 7 格对应质量属性（与合并标题行后的 API 行号无关）
+Private Function FindPayloadMassPlaceholderCell(tbl As Object, ByRef outRow As Integer, ByRef outCol As Integer) As Boolean
+    Dim r As Integer, c As Integer
+    Dim rc As Long, cc As Long
+    Dim s As String
+    
+    FindPayloadMassPlaceholderCell = False
+    On Error Resume Next
+    rc = tbl.RowCount
+    cc = tbl.ColumnCount
+    If Err.Number <> 0 Then Err.Clear: Exit Function
+    If rc < 1 Or cc < 1 Then Exit Function
+    
+    For r = 0 To rc - 1
+        For c = 0 To cc - 1
+            s = Trim$(GetTableCellTextSafe(tbl, r, c))
+            If StrComp(s, "Mass", vbTextCompare) = 0 Then
+                outRow = r
+                outCol = c
+                FindPayloadMassPlaceholderCell = True
+                Exit Function
+            End If
+        Next c
+    Next r
+End Function
+
+Private Function TrySetTableCellText(tbl As Object, rowIdx As Integer, colIdx As Integer, cellText As String) As Boolean
+    On Error Resume Next
+    tbl.Text(rowIdx, colIdx) = cellText
+    If Err.Number = 0 Then TrySetTableCellText = True: GoTo done
+    Err.Clear
+    
+    tbl.Text rowIdx, colIdx, cellText
+    If Err.Number = 0 Then TrySetTableCellText = True: GoTo done
+    Err.Clear
+    
+    tbl.Text2 rowIdx, colIdx, False, cellText
+    If Err.Number = 0 Then TrySetTableCellText = True: GoTo done
+    Err.Clear
+    
+    tbl.Text2 rowIdx, colIdx, True, cellText
+    If Err.Number = 0 Then TrySetTableCellText = True: GoTo done
+    Err.Clear
+    
+    TrySetTableCellText = False
+done:
+    Err.Clear
+End Function
+
+Private Function CellNumericTextMatches(tbl As Object, rowIdx As Integer, colIdx As Integer, ByVal expectedText As String) As Boolean
+    Dim got As String
+    got = Trim$(GetTableCellTextSafe(tbl, rowIdx, colIdx))
+    If Len(got) = 0 Then Exit Function
+    CellNumericTextMatches = (Abs(Val(got) - Val(expectedText)) < 0.0000001)
+End Function
+
+Private Function TryWritePayloadTableCell(tbl As Object, rowIdx As Integer, colIdx As Integer, cellText As String) As Boolean
+    If Not TrySetTableCellText(tbl, rowIdx, colIdx, cellText) Then Exit Function
+    TryWritePayloadTableCell = CellNumericTextMatches(tbl, rowIdx, colIdx, cellText)
+End Function
+
+Private Function ResolvePayloadValueOriginCell(tbl As Object, massProps As Variant, ByRef baseRow As Integer, ByRef baseCol As Integer) As Boolean
+    Dim probe As String
+    Dim pairs As Variant
+    Dim k As Integer
+    Dim br As Integer, bc As Integer
+    
+    ResolvePayloadValueOriginCell = False
+    probe = FormatPayloadMassForTable(massProps(0))
+    
+    If FindPayloadMassPlaceholderCell(tbl, baseRow, baseCol) Then
+        If TryWritePayloadTableCell(tbl, baseRow, baseCol, probe) Then
+            ResolvePayloadValueOriginCell = True
+            Exit Function
+        End If
+    End If
+    
+    pairs = Array(1, 1, 0, 1, 2, 2, 2, 1, 1, 2, 0, 0, 1, 0, 2, 0, 3, 1, 3, 2)
+    For k = 0 To UBound(pairs) Step 2
+        br = pairs(k)
+        bc = pairs(k + 1)
+        If TryWritePayloadTableCell(tbl, br, bc, probe) Then
+            baseRow = br
+            baseCol = bc
+            ResolvePayloadValueOriginCell = True
+            Exit Function
+        End If
+    Next k
+End Function
+
+Function WriteTableDataDirect(swTable As Object, massProps As Variant) As Boolean
+    Dim i As Integer
+    Dim baseRow As Integer
+    Dim baseCol As Integer
+    Dim cellVal As Double
+    
+    WriteTableDataDirect = False
+    If swTable Is Nothing Then Exit Function
+    
+    If Not ResolvePayloadValueOriginCell(swTable, massProps, baseRow, baseCol) Then Exit Function
+    
+    For i = 1 To 6
+        cellVal = CDbl(massProps(i))
+        If i <= 3 Then cellVal = Abs(cellVal)
+        If Not TryWritePayloadTableCell(swTable, baseRow + i, baseCol, Format(cellVal, "0.000")) Then Exit Function
+    Next i
+    
+    WriteTableDataDirect = True
 End Function
 
 ' 清理资源

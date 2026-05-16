@@ -4,6 +4,7 @@
 ' 250611更换log地址
 ' 260512增加质心显示并导出功能
 ' 260514增加PAYLOAD数据写入功能
+' 260516增加工程图视图名称动态获取功能
 ' ******************************************************************************
 
 ' 声明SolidWorks应用程序接口类型（早期绑定）
@@ -18,6 +19,9 @@ Const TEMPLATE_PATH As String = "\\192.168.160.2\生产管理部3d\3D 资料\che
 Const NETWORK_BASE_PATH As String = "\\192.168.160.2\生产管理部3d\3D 资料\01-设计一课确认图\DWG-TEMP\"
 ' 日志相关常量
 Const LOG_BASE_PATH As String = "\\192.168.160.2\生产管理部3d\3D 资料\check\check27\Version control\VBA FOR SW\LOG\DWG"
+
+' 主基础视图在工程图中的名称（随 SolidWorks 界面语言变化，创建后由 API 回填，勿写死「工程图视图1」/「Drawing View1」）
+Private mainBaseDrawingViewName As String
 
 Sub main()
     On Error GoTo ErrorHandler
@@ -145,16 +149,38 @@ Sub AddMainView()
     Dim myView As SldWorks.View
     Const X_POS As Double = 1.74507863225707
     Const Y_POS As Double = 1.27989000106076
+    Dim orientNames As Variant
+    Dim i As Long
+    
+    mainBaseDrawingViewName = ""
     
     ' 隐藏所有类型
     swModel.SetUserPreferenceToggle swUserPreferenceToggle_e.swViewDisplayHideAllTypes, True
     
-    ' 从前视方向创建基础视图
-    Set myView = swModel.CreateDrawViewFromModelView3(currentAssembly.GetPathName(), "*前视", X_POS, Y_POS, 0)
+    ' 从前视方向创建基础视图：英文界面用 *Front，中文常用 *前视，依次尝试以兼容两种语言
+    orientNames = Array("*Front", "*前视")
+    Set myView = Nothing
+    For i = LBound(orientNames) To UBound(orientNames)
+        On Error Resume Next
+        Err.Clear
+        Set myView = swModel.CreateDrawViewFromModelView3(currentAssembly.GetPathName(), CStr(orientNames(i)), X_POS, Y_POS, 0)
+        If Err.Number <> 0 Then
+            Set myView = Nothing
+            Err.Clear
+        End If
+        On Error GoTo ViewError
+        If Not myView Is Nothing Then Exit For
+    Next i
     
-    ' 激活视图进行操作
-    swModel.Extension.SelectByID2 "工程图视图1", "DRAWINGVIEW", 0, 0, 0, False, 0, Nothing, 0
-    swModel.ActivateView "工程图视图1"
+    If myView Is Nothing Then
+        Err.Raise vbObjectError + 7, , "添加主视图失败：CreateDrawViewFromModelView3 未返回视图（已尝试 *Front、*前视）。"
+    End If
+    
+    mainBaseDrawingViewName = myView.Name
+    
+    ' 使用 API 返回的实际视图名，避免写死「工程图视图1」/「Drawing View1」等本地化名称
+    swModel.Extension.SelectByID2 mainBaseDrawingViewName, "DRAWINGVIEW", 0, 0, 0, False, 0, Nothing, 0
+    swModel.ActivateView mainBaseDrawingViewName
     
     Exit Sub
     
@@ -177,10 +203,13 @@ Sub AddUnfoldedViews()
         Array(3.00347258278153, 1.27989000106076) _
     )
     
-    ' 循环创建视图
+    ' 循环创建视图（父视图名与界面语言相关，须与 AddMainView 中记录的一致）
     For i = 0 To UBound(viewCoordinates)
         swModel.ClearSelection2 True
-        swModel.Extension.SelectByID2 "工程图视图1", "DRAWINGVIEW", 0, 0, 0, False, 0, Nothing, 0
+        If Len(mainBaseDrawingViewName) = 0 Then
+            Err.Raise vbObjectError + 8, , "添加展开视图失败：主视图名称未初始化。"
+        End If
+        swModel.Extension.SelectByID2 mainBaseDrawingViewName, "DRAWINGVIEW", 0, 0, 0, False, 0, Nothing, 0
         swModel.CreateUnfoldedViewAt3 viewCoordinates(i)(0), viewCoordinates(i)(1), 0, False
     Next i
     
@@ -850,13 +879,9 @@ End Function
 ' 清理资源
 Sub CleanUp()
     On Error Resume Next
+    mainBaseDrawingViewName = ""
     Set swSheet = Nothing
     Set swDrawing = Nothing
     Set swModel = Nothing
     Set currentAssembly = Nothing
-    swApp.ActivateDoc2 currentAssembly.GetTitle(), False, 0
 End Sub
-
-
-
-

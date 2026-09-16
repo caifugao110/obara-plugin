@@ -174,7 +174,7 @@ End Function
 ' 不区分大小写：统一转成小写再 InStr
 ' 排除"model"关键词，但保留"mod"
 ' X1-X9如果前面有数字则忽略
-' 仅排除X2C这一个
+' 排除X2C和X5C这两个
 ' X前面如果是字母S或者W也要排除
 ' 包含NEW时排除特定名称"CON-C0039-NEW"
 Private Function MatchKeywords(ByVal txt As String, ByRef keywords() As String) As String
@@ -206,9 +206,14 @@ Private Function MatchKeywords(ByVal txt As String, ByRef keywords() As String) 
                                     GoTo NextKeyword
                                 End If
                             End If
-                            ' 仅排除X2C这一个
+                            ' 排除X2C和X5C
                             If keyLow = "x2" And pos + 2 <= Len(low) Then
                                 If Mid$(low, pos, 3) = "x2c" Then
+                                    GoTo NextKeyword
+                                End If
+                            End If
+                            If keyLow = "x5" And pos + 2 <= Len(low) Then
+                                If Mid$(low, pos, 3) = "x5c" Then
                                     GoTo NextKeyword
                                 End If
                             End If
